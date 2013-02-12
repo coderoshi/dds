@@ -2,6 +2,7 @@ require 'digest/sha1'
 require 'rubygems'
 require 'zmq'
 require './hashes'
+require './vclock'
 
 class Map
   def initialize(func_str, data)
@@ -37,6 +38,31 @@ class Reduce
   end
 end
 
+class NodeObject
+  attr :value, :vclock
+  def initialize(value, vclock)
+    @value = value
+    @vclock = vclock
+  end
+
+  def <=>(nobject2)
+    vclock <=> nobject2.vclock
+  end
+
+  def serialize
+    {:value=>value, :vclock=> vclock}.to_json
+  end
+
+  def self.deserialize(serialized)
+    data = JSON.parse(serialized)
+    vclock = VectorClock.deserialize(data['vclock'])
+    NodeObject.new(data['value'], vclock)
+  end
+
+  def to_s
+    serialize
+  end
+end
 
 Thread.abort_on_exception = true
 class Node
@@ -120,9 +146,7 @@ class Node
           msg, node = line.split(' ', 2)
           case msg
           when 'join'
-            @nodes << node
-            @nodes.uniq!
-            @nodes.sort!
+            @nodes = (@nodes << node).uniq.sort
           when 'down'
             @nodes -= [node]
           end
@@ -149,20 +173,20 @@ class Node
         end
         # recv/send because it's a req/res
         while line = rep.recv
-          msg, key, value = line.split(' ', 3)
-          # p line
+          msg, payload = line.split(' ', 2)
           case msg
           when 'put'
-            rep.send( put(key, value).to_s )
+            n, key, vc, value = payload.split(' ', 4)
+            rep.send( put(key, vc, value, n.to_i).to_s )
           when 'get'
-            rep.send( get(key).to_s )
+            n, key, value = payload.split(' ', 3)
+            rep.send( get(key, n.to_i).to_s )
           when 'map'
-            _, map_func = line.split(' ', 2)
-            rep.send( Map.new(map_func, @data).call.to_s )
+            rep.send( Map.new(payload, @data).call.to_s )
           when 'mr'
-            map_func, reduce_func = mr_message(line)
-            results = remote_maps(map_func)
-            rep.send( reduce(reduce_func, results).to_s )
+            map_func, reduce_func = payload.split(/\;\s+reduce/, 2)
+            reduce_func = "reduce#{reduce_func}"
+            rep.send( reduce(reduce_func, remote_maps(map_func)).to_s )
           else
             rep.send( 'what?' )
           end
@@ -171,13 +195,6 @@ class Node
         puts e.backtrace.join("\n")
       end
     end
-  end
-
-  def mr_message(message)
-    _, mr_code = message.split ' ', 2
-    map_func, reduce_func = mr_code.split(/\;\s+reduce/, 2)
-    # TODO: split without removing 'reduce'
-    [map_func, "reduce#{reduce_func}"]
   end
 
   # run in parallel, then join results
@@ -215,30 +232,110 @@ class Node
     end
   end
 
-  def get(key)
+  # return a list of successive nodes
+  # that can also hold this value
+  def pref_list(n=3)
+    list = @nodes.clone
+    while list.first != @name
+      list << list.shift
+    end
+    list[1...n]
+  end
+
+  # with these messages we don't look for the
+  # proper node, we just add the value
+  def get(key, n=1)
+    # 0 means get locally
+    if n == 0
+      puts "get 0 #{key}"
+      return @data[hash(key)] || "null"
+    end
+    # if we ask for just one, and it's here, return it!
+    if n == 1 && value = @data[hash(key)]
+      puts "get 1 #{key} (local)"
+      return value
+    end
     node = @ring.node(key)
     if node == @name
-      puts "get #{key}"
-      @data[hash(key)]
+      puts "get #{n} #{key}"
+      results = replicate("get 0 #{key}", n)
+      results.map! do |r|
+        r == 'null' ? nil : NodeObject.deserialize(r)
+      end
+      results << @data[hash(key)]
+      results.compact!
+      begin
+        results.sort.first
+      rescue
+        # a conflic forces sublings
+        puts "Conflict!"
+        return results
+      end
     else
-      remote_call(node, "get #{key}")
+      remote_call(node, "get #{n} #{key}")
     end
   end
 
-  def put(key, value)
+  def put(key, vc, value, n=1)
+    # 0 means insert locally
+    # use the vclock given
+    if n == 0
+      vclock = VectorClock.deserialize(vc)
+      puts "put 0 #{key} #{vclock} #{value}"
+      new_obj = [NodeObject.new(value, vclock)]
+      return @data[hash(key)] = new_obj
+    end
     # check for correct node
     node = @ring.node(key)
     if node == @name
-      puts "put #{key} #{value}"
-      @data[hash(key)] = value
-      'true'
+      # we don't care what a given vclock is,
+      # just grab this node's clock as definitive
+      vclock = VectorClock.deserialize(vc)
+      node_object = []
+      if current_obj = @data[hash(key)]
+        # if no clock was given, just use the old one
+        if vclock.empty?
+          vclock = current_obj.vclock
+          vclock.increment(@name)
+          node_object = [NodeObject.new(value, vclock)]
+        # otherwise, ensure the given one is a decendant of
+        # an existing clock. If not, create a sibling
+        else
+          current_obj = [current_obj] unless Array === current_obj
+          if current_obj.find{|o| vclock.descends_from?(o.vclock)}
+            # is a decendant, assume this is resolving a conflict
+            vclock.increment(@name)
+            node_object = [NodeObject.new(value, vclock)]
+          else
+            # not a decendant of anything, ie conflict. add as a sibling
+            vclock.increment(@name)
+            node_object = current_obj + [NodeObject.new(value, vclock)]
+          end
+        end
+      else
+        vclock.increment(@name)
+        node_object = [NodeObject.new(value, vclock)]
+      end
+      # vclock = old_val = @data[hash(key)] ? old_val.vclock : VectorClock.new
+      # vclock.increment(@name)
+      puts "put #{n} #{key} #{vclock} #{value}"
+      @data[hash(key)] = node_object
+      replicate("put 0 #{key} #{vclock} #{value}", n)
+      return new_obj
     else
-      remote_call(node, "put #{key} #{value}")
+      remote_call(node, "put #{n} #{key} #{vc} #{value}")
     end
   end
 
-  # TODO: test three nodes
-  # TODO: keep ports open
+  def replicate(message, n)
+    list = pref_list(n)
+    results = []
+    while replicate_node = list.shift
+      results << remote_call(replicate_node, message)
+    end
+    results
+  end
+
   def remote_call(node, message)
     puts "#{node} <= #{message}"
     name, port = node.split ':'
@@ -269,13 +366,12 @@ end
 # we're using ports here, because it's easier to run locally
 # however, this could easily be an ip address:port
 begin
+  $n = 3
   node, coordinator = ARGV
   name, port = node.split ':'
   $node = Node.new(node)
 
   trap("SIGINT") { $node.close }
-
-  # TODO: gossip?
 
   leader = false
   if coordinator.nil?

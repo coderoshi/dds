@@ -1,3 +1,5 @@
+require 'json'
+
 class VectorClock
   attr_reader :vector
   def initialize(vector={})
@@ -9,8 +11,9 @@ class VectorClock
     @vector[clientId] = count + 1
   end
 
+  # equality is assumed to be a decendant
   def descends_from?(vclock2)
-    (self <=> vclock2) > 0 rescue false
+    (self <=> vclock2) >= 0 rescue false
   end
 
   def conflicts_with?(vclock2)
@@ -36,17 +39,40 @@ class VectorClock
     end
     raise "Conflict"
   end
+
+  def serialize
+    @vector.to_json
+  end
+
+  def self.deserialize(serialized)
+    VectorClock.new(JSON.parse(serialized))
+  end
+
+  def empty?
+    vector.empty?
+  end
+
+  def to_s
+    serialize
+  end
 end
 
-vc = VectorClock.new
-vc.increment("adam")
-vc.increment("barb")
 
-vc2 = VectorClock.new(vc.vector.clone)
-puts vc.descends_from?(vc2)
+### run tests
+if __FILE__ == $0
 
-vc.increment("adam")
-puts vc.descends_from?(vc2)
+  vc = VectorClock.new
+  vc.increment("adam")
+  vc.increment("barb")
 
-vc2.increment("barb")
-puts vc2.conflicts_with?(vc)
+  vc2 = VectorClock.deserialize(vc.serialize)
+  puts vc.descends_from?(vc2)
+
+  vc.increment("adam")
+  puts vc.descends_from?(vc2)
+
+  vc2.increment("barb")
+  puts vc2.conflicts_with?(vc)
+
+  puts vc2.serialize
+end
