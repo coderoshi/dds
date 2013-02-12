@@ -3,40 +3,8 @@ require 'rubygems'
 require 'zmq'
 require './hashes'
 require './vclock'
-
-class Map
-  def initialize(func_str, data)
-    @data = data
-    @func = func_str
-  end
-
-  def call
-    eval(@func, binding)
-  end
-
-  # calls given map block for every value
-  def map
-    @results = []
-    @data.each {|k,v| @results += yield k,v }
-    @results
-  end
-end
-
-class Reduce
-  def initialize(func_str, results)
-    @results = results
-    @func = func_str
-  end
-
-  def call
-    eval(@func, binding)
-  end
-
-  # calls given reduce block for every value
-  def reduce
-    yield @results
-  end
-end
+require './merkle'
+# require './mapreduce'
 
 class NodeObject
   attr :value, :vclock
@@ -49,8 +17,12 @@ class NodeObject
     vclock <=> nobject2.vclock
   end
 
+  def to_s
+    serialize
+  end
+
   def serialize
-    {:value=>value, :vclock=> vclock}.to_json
+    {:value=>value, :vclock=>vclock}.to_json
   end
 
   def self.deserialize(serialized)
@@ -58,40 +30,45 @@ class NodeObject
     vclock = VectorClock.deserialize(data['vclock'])
     NodeObject.new(data['value'], vclock)
   end
-
-  def to_s
-    serialize
-  end
 end
 
-Thread.abort_on_exception = true
 class Node
+  # include Mapreduce
+
   def initialize(name, nodes=[], partitions=32)
     @name = name
     @nodes = nodes << @name
     @ring = PartitionedConsistentHash.new(@nodes, partitions)
     @data = {}
-    @remotes = {}
+    @services = []
   end
 
-  # receiving a request, forwarding
-  def start(port, coordinator, leader)
-    @tracker = track_cluster(coordinator)
+  def start(port, coord_pubsub, leader)
+    @coord_reqres = coord_pubsub + 800
     @leader = leader
-    if leader
-      @ring_coordinator = coordinate(coordinator)
-    else
-      join(coordinator)
-    end
 
-    @service = service(4001, false) #port)
-    @inter_service = service(port.to_i + 1000)
-    puts "accepting client requests"
-    
-    @service.join if @service
-    @inter_service.join if @inter_service
-    @ring_coordinator.join if @ring_coordinator
-    @tracker.join if @tracker
+    # ring coordination
+    track_cluster(coord_pubsub)
+    coordinate_cluster(coord_pubsub, @coord_reqres)
+    inform_coordinator('join', @coord_reqres)
+
+    # service(4001, false) #port)
+    service(port)
+    service(port + 1000)
+    puts "service started"
+
+    @services.each{|service| service.join}
+  end
+
+  Thread.abort_on_exception = true
+  def thread
+    @services << Thread.new do
+      begin
+        yield
+      rescue => e
+        puts e.backtrace.join("\n")
+      end
+    end
   end
 
   # now that we can keep our clusters in
@@ -102,45 +79,30 @@ class Node
   # configuration, it doesn't matter if the publisher goes down
   # (until you need to make another ring change)
   def track_cluster(port)
-    puts "tracking cluster changes"
-    Thread.new do
-      begin
-        ctx = ZMQ::Context.new
-        sub = ctx.socket(ZMQ::SUB)
-        sub.connect("tcp://127.0.0.1:#{port}")
-        sub.setsockopt(ZMQ::SUBSCRIBE, 'ring')
-        # recv ONLY because it's a subscriber
-        while line = sub.recv
-          msg, nodes = line.split(' ', 2)
-          @nodes = nodes.split(',').map{|x| x.strip}
-          @nodes.uniq!
-          @ring.cluster(@nodes.sort!)
-          puts "ring: #{@nodes.inspect}"
-        end
-      rescue => e
-        puts e.backtrace.join("\n")
+    thread do
+      ctx = ZMQ::Context.new
+      sub = ctx.socket(ZMQ::SUB)
+      sub.connect("tcp://127.0.0.1:#{port}")
+      sub.setsockopt(ZMQ::SUBSCRIBE, 'ring')
+      # recv ONLY because it's a subscriber
+      while line = sub.recv
+        msg, nodes = line.split(' ', 2)
+        @nodes = nodes.split(',').map{|x| x.strip}
+        @nodes.uniq!
+        @ring.cluster(@nodes.sort!)
+        puts "ring changed: #{@nodes.inspect}"
       end
     end
   end
 
-  # coord node?
-  def join(coordinator)
-    @coordinator = coordinator
-    ctx = ZMQ::Context.new
-    req = ctx.socket(ZMQ::REQ)
-    req.connect("tcp://127.0.0.1:#{coordinator.to_i + 800}")
-    req.send("join #{@name}") && req.recv
-    req.close
-  end
-
-  def coordinate(port)
-    Thread.new do
-      begin
+  def coordinate_cluster(pub_port, rep_port)
+    if @leader
+      thread do
         ctx = ZMQ::Context.new
         pub = ctx.socket(ZMQ::PUB)
-        pub.bind("tcp://*:#{port}")
+        pub.bind("tcp://*:#{pub_port}")
         rep = ctx.socket(ZMQ::REP)
-        rep.bind("tcp://*:#{port + 800}")
+        rep.bind("tcp://*:#{rep_port}")
 
         while line = rep.recv
           msg, node = line.split(' ', 2)
@@ -150,86 +112,58 @@ class Node
           when 'down'
             @nodes -= [node]
           end
-
           # tell all nodes about the new ring
           pub.send('ring ' + @nodes.join(','))
           rep.send('true')
         end
-      rescue => e
-        puts e.backtrace.join("\n")
       end
     end
   end
 
+  def inform_coordinator(action, req_port)
+    unless @leader
+      ctx = ZMQ::Context.new
+      req = ctx.socket(ZMQ::REQ)
+      req.connect("tcp://127.0.0.1:#{req_port}")
+      req.send("#{action} #{@name}") && req.recv
+      req.close
+    end
+  end
+
+  # helper function to create a req/res service,
+  # and relay message to corrosponding methods
   def service(port, sink=true)
-    Thread.new do
-      begin
-        ctx = ZMQ::Context.new
-        rep = ctx.socket(ZMQ::REP)
-        if sink
-          rep.bind("tcp://127.0.0.1:#{port}")
-        else
-          rep.connect("tcp://127.0.0.1:#{port}")
-        end
-        # recv/send because it's a req/res
-        while line = rep.recv
-          msg, payload = line.split(' ', 2)
-          case msg
-          when 'put'
-            n, key, vc, value = payload.split(' ', 4)
-            rep.send( put(key, vc, value, n.to_i).to_s )
-          when 'get'
-            n, key, value = payload.split(' ', 3)
-            rep.send( get(key, n.to_i).to_s )
-          when 'map'
-            rep.send( Map.new(payload, @data).call.to_s )
-          when 'mr'
-            map_func, reduce_func = payload.split(/\;\s+reduce/, 2)
-            reduce_func = "reduce#{reduce_func}"
-            rep.send( reduce(reduce_func, remote_maps(map_func)).to_s )
-          else
-            rep.send( 'what?' )
-          end
-        end
-      rescue => e
-        puts e.backtrace.join("\n")
+    thread do
+      ctx = ZMQ::Context.new
+      rep = ctx.socket(ZMQ::REP)
+      if sink
+        rep.bind("tcp://127.0.0.1:#{port}")
+      else
+        rep.connect("tcp://127.0.0.1:#{port}")
+      end
+      # recv/send because it's a req/res
+      while line = rep.recv
+        msg, payload = line.split(' ', 2)
+        # call the function of the given message
+        # warning: really unsafe, but easy!
+        send( msg.to_sym, rep, payload )
       end
     end
   end
 
-  # run in parallel, then join results
-  def remote_maps(map_func)
-    # TODO: is ruby array threadsafe?
-    results = []
-    workers = []
-    @nodes.each do |node|
-      workers << Thread.new do
-        res = remote_call(node, "map #{map_func}")
-        results += eval(res)
-      end
-    end
-    workers.each{|w| w.join }
-    results
+  def put(socket, payload)
+    n, key, vc, value = payload.split(' ', 4)
+    socket.send( do_put(key, vc, value, n.to_i).to_s )
   end
 
-  def map(map_func, data)
-    Map.new(map_func, data).call
+  def get(socket, payload)
+    n, key, value = payload.split(' ', 3)
+    socket.send( do_get(key, n.to_i).to_s )
   end
 
-  def reduce(reduce_func, results)
-    Reduce.new(reduce_func, results).call
-  end
-
-  def hash(key)
-    Digest::SHA1.hexdigest(key.to_s).hex
-  end
-
-  def cluster(nodes)
-    @nodes.each do |node|
-      @ring.add(node)
-      puts "Added #{node}"
-      @nodes << node
-    end
+  def method_missing(method, *args, &block)
+    socket, payload = args
+    payload.send('what?') if payload
   end
 
   # return a list of successive nodes
@@ -244,14 +178,14 @@ class Node
 
   # with these messages we don't look for the
   # proper node, we just add the value
-  def get(key, n=1)
+  def do_get(key, n=1)
     # 0 means get locally
     if n == 0
       puts "get 0 #{key}"
-      return @data[hash(key)] || "null"
+      return @data[@ring.hash(key)] || "null"
     end
     # if we ask for just one, and it's here, return it!
-    if n == 1 && value = @data[hash(key)]
+    if n == 1 && value = @data[@ring.hash(key)]
       puts "get 1 #{key} (local)"
       return value
     end
@@ -262,7 +196,7 @@ class Node
       results.map! do |r|
         r == 'null' ? nil : NodeObject.deserialize(r)
       end
-      results << @data[hash(key)]
+      results << @data[@ring.hash(key)]
       results.compact!
       begin
         results.sort.first
@@ -276,14 +210,14 @@ class Node
     end
   end
 
-  def put(key, vc, value, n=1)
+  def do_put(key, vc, value, n=1)
     # 0 means insert locally
     # use the vclock given
     if n == 0
       vclock = VectorClock.deserialize(vc)
       puts "put 0 #{key} #{vclock} #{value}"
       new_obj = [NodeObject.new(value, vclock)]
-      return @data[hash(key)] = new_obj
+      return @data[@ring.hash(key)] = new_obj
     end
     # check for correct node
     node = @ring.node(key)
@@ -292,17 +226,22 @@ class Node
       # just grab this node's clock as definitive
       vclock = VectorClock.deserialize(vc)
       node_object = []
-      if current_obj = @data[hash(key)]
+      if current_obj = @data[@ring.hash(key)]
         # if no clock was given, just use the old one
         if vclock.empty?
-          vclock = current_obj.vclock
-          vclock.increment(@name)
-          node_object = [NodeObject.new(value, vclock)]
+          # if no sibling, just update
+          if current_obj.length == 1
+            vclock = current_obj.first.vclock
+            vclock.increment(@name)
+            node_object = [NodeObject.new(value, vclock)]
+          else
+            vclock.increment(@name)
+            node_object += [NodeObject.new(value, vclock)]
+          end
         # otherwise, ensure the given one is a decendant of
         # an existing clock. If not, create a sibling
         else
-          current_obj = [current_obj] unless Array === current_obj
-          if current_obj.find{|o| vclock.descends_from?(o.vclock)}
+          if current_obj.find{|o| o.vclock.descends_from?(vclock)}
             # is a decendant, assume this is resolving a conflict
             vclock.increment(@name)
             node_object = [NodeObject.new(value, vclock)]
@@ -316,10 +255,8 @@ class Node
         vclock.increment(@name)
         node_object = [NodeObject.new(value, vclock)]
       end
-      # vclock = old_val = @data[hash(key)] ? old_val.vclock : VectorClock.new
-      # vclock.increment(@name)
       puts "put #{n} #{key} #{vclock} #{value}"
-      @data[hash(key)] = node_object
+      @data[@ring.hash(key)] = node_object
       replicate("put 0 #{key} #{vclock} #{value}", n)
       return new_obj
     else
@@ -350,18 +287,12 @@ class Node
   end
 
   def close
-    unless @leader
-      ctx = ZMQ::Context.new
-      req = ctx.socket(ZMQ::REQ)
-      req.setsockopt(ZMQ::LINGER, 0)
-      req.connect("tcp://127.0.0.1:#{@coordinator.to_i + 800}")
-      req.send("down #{@name}") && req.recv
-      req.close
-    end
+    inform_coordinator('down', @coord_reqres)
   ensure
     exit!
   end
 end
+
 
 # we're using ports here, because it's easier to run locally
 # however, this could easily be an ip address:port
@@ -378,5 +309,9 @@ begin
     coordinator = port.to_i - 100
     leader = true
   end
-  $node.start(port, coordinator, leader)
+
+  coord_pubsub = coordinator
+  coord_reqres = coordinator + 800
+
+  $node.start(port.to_i, coordinator.to_i, leader)
 end

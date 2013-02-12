@@ -7,7 +7,7 @@ require 'json'
 # How do we live beyond node failure? N Replication
 # How do we know which value is correct? Add Vector Clocks
 
-
+# CRDT
 # Use PUSH/PULL for AAE
 # Map/Reduce should be the last thing
 # TODO: Make add-ons modules
@@ -16,7 +16,8 @@ require 'json'
 # Replace pub/sub ring-leader with req/res gossip protocol
 # Allow sloppy quorums and data transfer of downed nodes with hinted handoff
 
-port = 4000
+# port = 4000
+port = 2201
 ctx = ZMQ::Context.new
 req = ctx.socket(ZMQ::REQ)
 req.connect("tcp://127.0.0.1:#{port}")
@@ -37,8 +38,10 @@ puts "Inserting Values"
 # resp = req.send("put 2 key {\"A:2201\":2,\"B:2201\":2} hello") && req.recv
 
 # Counters
-req.send("put 1 key {\"A:2201\":1} +1") && req.recv
-req.send("put 1 key {\"B:2202\":1} +1") && req.recv
+# req.send("put 1 key {\"A:2201\":1} +1") && req.recv
+# req.send("put 1 key {\"B:2202\":1} +1") && req.recv
+req.send("put 1 key {} +1") && req.recv
+
 vals = req.send("get 2 key") && req.recv
 p JSON.parse(vals)
 p JSON.parse(vals).reduce(0){|sum,v| sum + v['value'].to_i}

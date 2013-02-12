@@ -1,10 +1,7 @@
 require 'digest/sha1'
 
 class MerkleTree
-  attr :nodes
-  attr :blocks
-  attr :block_size
-  attr :root
+  attr :nodes, :blocks, :block_size, :root
 
   def initialize(block_size=1024)
     @block_size = block_size
@@ -113,7 +110,12 @@ class MerkleTree
   end
 end
 
-mt = MerkleTree.new()
-ARGF.each { |line| mt.add_line(line) }
-mt.finish
-mt.output
+### run tests
+if __FILE__ == $0
+
+  mt = MerkleTree.new()
+  ARGF.each { |line| mt.add_line(line) }
+  mt.finish
+  mt.output
+
+end
