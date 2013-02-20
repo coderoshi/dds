@@ -1,0 +1,6 @@
+{
+  "name":"A",
+  "port":2200,
+  "coord_pub":8100,
+  "coord_req":8101
+}

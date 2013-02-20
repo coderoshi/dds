@@ -40,10 +40,6 @@ class VectorClock
     raise "Conflict"
   end
 
-  def serialize
-    @vector.to_json
-  end
-
   def self.deserialize(serialized)
     VectorClock.new(JSON.parse(serialized))
   end
@@ -53,7 +49,7 @@ class VectorClock
   end
 
   def to_s
-    serialize
+    @vector.to_json
   end
 end
 
@@ -65,7 +61,7 @@ if __FILE__ == $0
   vc.increment("adam")
   vc.increment("barb")
 
-  vc2 = VectorClock.deserialize(vc.serialize)
+  vc2 = VectorClock.deserialize(vc.to_s)
   puts vc.descends_from?(vc2)
 
   vc.increment("adam")
@@ -74,5 +70,5 @@ if __FILE__ == $0
   vc2.increment("barb")
   puts vc2.conflicts_with?(vc)
 
-  puts vc2.serialize
+  puts vc2.to_s
 end
