@@ -132,6 +132,7 @@ class Node
       results.flatten!
       results.uniq! {|o| o && o.value }
       results.compact!
+      repair(key, n)
       begin
         # we get the most recent value if we can resolve this
         [results.sort.first]
@@ -146,13 +147,32 @@ class Node
   end
 
   def replicate(message, key, n)
-    list = @ring.pref_list(key, n)
-    list -= [@name]
+    list = @ring.pref_list(key, n) - [@name]
     results = []
     while replicate_node = list.shift
       results << remote_call(replicate_node, message)
     end
     results
+  end
+
+  def repair(key, n)
+    list = @ring.pref_list(key, n) - [@name]
+    puts "Repairing #{key}"
+    list.map do |replicate_node|
+      Thread.new do
+        result = remote_call(replicate_node, "get 0 #{key}")
+        remote_objs = NodeObject.deserialize(result)
+        if remote_objs != 'null'
+          # if local is nil or descends, update local
+          local = @data[@ring.hash(key)]
+          vclock = local && local.first.vclock
+          descends = remote_objs.find{|o| o.vclock.descends_from?(vclock)}
+          if vclock == nil || descends
+            @data[@ring.hash(key)] = nos
+          end
+        end
+      end
+    end
   end
 
   def remote_call(remote_name, message)
