@@ -11,9 +11,13 @@ class Map
 
   # calls given map block for every value
   def map
-    @results = []
-    @data.each {|k,v| @results += yield k,v }
-    @results
+    results = []
+    @data.each {|k,v|
+      if v.first.prime
+        results += yield(k,v)
+      end
+    }
+    results
   end
 end
 
@@ -37,25 +41,27 @@ end
 
 module Mapreduce
   def map(socket, payload)
+    # only the data where this is the prime node
     socket.send( Map.new(payload, @data).call.to_s )
   end
 
   def mr(socket, payload)
     map_func, reduce_func = payload.split(/\;\s+reduce/, 2)
     reduce_func = "reduce#{reduce_func}"
-    socket.send( Reduce.new(reduce_func, remote_maps(map_func)).call.to_s )
+    socket.send( Reduce.new(reduce_func, call_maps(map_func)).call.to_s )
   end
 
   # run in parallel, then join results
-  def remote_maps(map_func)
-    workers, results = [], []
-    @nodes.each do |node|
-      workers << Thread.new do
+  def call_maps(map_func)
+    results = []
+    nodes = @ring.nodes - [@name]
+    nodes.map {|node|
+      Thread.new do
         res = remote_call(node, "map #{map_func}")
         results += eval(res)
       end
-    end
-    workers.each{|w| w.join}
+    }.each{|w| w.join}
+    results += Map.new(map_func, @data).call
     results
   end
 end
