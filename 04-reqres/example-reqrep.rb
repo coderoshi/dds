@@ -6,8 +6,7 @@ trap("SIGINT") { exit! }
 
 $port = 2200
 
-# server
-thread do
+thread do   # server
   ctx = ZMQ::Context.new
   rep = ctx.socket(ZMQ::REP)
   rep.bind( "tcp://127.0.0.1:#{$port}" )
@@ -21,13 +20,15 @@ thread do
   end
 end
 
-# client
-thread do
+thread do   # client
   ctx = ZMQ::Context.new
   req = ctx.socket(ZMQ::REQ)
   req.connect( "tcp://127.0.0.1:#{$port}" )
   req.send( "put foo bar" )
   puts req.recv
+  sleep 1
+  puts req.send( "put foo2 bar2" ) && req.recv
+  exit!
 end
 
 join_threads
