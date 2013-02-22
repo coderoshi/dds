@@ -2,7 +2,8 @@ require 'json'
 require 'zmq'
 require './hash'
 require './threads'
-require './reply-service'
+require './config'
+require './services'
 
 
 # an object to store in a server node
@@ -26,22 +27,23 @@ end
 # Manages a hash ring as well as a hash of data
 class Node
   include Threads
-  include ReplyService
+  include Configuration
+  include Services
 
   def initialize(name, nodes=[], partitions=32)
     @name = name
-    @ring = PartitionedConsistentHash.new(nodes+[name], partitions)
+    @ring = PartitionedConsistentHash.new(nodes, partitions)
     @data = {}
   end
 
-  def config(name)
-    (@configs ||= {})[name] ||= JSON::load(File.read("#{name}.json"))
-  end
-
   def start()
-    service( config(@name)["port"] )
+    service( config(@name, "port") )
     puts "#{@name} started"
     join_threads()
+  end
+
+  def stop
+    exit!
   end
 
   def put(socket, payload)
@@ -76,18 +78,10 @@ class Node
 
   def remote_call(remote_name, message)
     puts "#{remote_name} <= #{message}"
-    remote_port = config(remote_name)["port"]
-    ctx = ZMQ::Context.new
-    req = ctx.socket(ZMQ::REQ)
-    req.connect("tcp://127.0.0.1:#{remote_port}")
-    
+    req = build_socket(ZMQ::REQ, false, remote_name)
     resp = req.send(message) && req.recv
     req.close
     resp
-  end
-
-  def close
-    exit!
   end
 end
 
@@ -96,6 +90,6 @@ end
 begin
   name = ARGV.first
   $node = Node.new(name, ['A','B','C'])
-  trap("SIGINT") { $node.close }
+  trap("SIGINT") { $node.stop }
   $node.start()
 end

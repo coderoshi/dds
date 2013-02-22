@@ -5,15 +5,25 @@
 # the first word is assumed to be a method, and
 # the remainder of the message is a payload,
 # calling and passed to the method
-module ReplyService
+module Services
+  def build_socket(kind, server=false, name=@name)
+    ctx = ZMQ::Context.new
+    sock = ctx.socket(kind)
+    if server
+      sock.bind("tcp://*:#{config(name,'port')}")
+    else
+      sock.connect("tcp://#{config(name,'ip')}:#{config(name,'port')}")
+    end
+    sock
+  end
+
   # helper function to create a req/res service,
   # and relay message to corresponding methods
-  def service(port, sink=true)
+  def service(port)
     thread do
       ctx = ZMQ::Context.new
       rep = ctx.socket(ZMQ::REP)
-      uri = "tcp://127.0.0.1:#{port}"
-      sink ? rep.bind(uri) : rep.connect(uri)
+      rep.bind("tcp://*:#{port}")
       # recv/send because it's a req/res
       while line = rep.recv
         msg, payload = line.split(' ', 2)
