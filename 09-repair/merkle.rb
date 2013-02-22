@@ -1,5 +1,8 @@
 require 'digest/sha1'
 
+# Unused, but pulled from
+# https://github.com/phad/merkle
+
 class MerkleTree
   attr :nodes, :blocks, :block_size, :root
 
