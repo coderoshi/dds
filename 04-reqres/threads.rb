@@ -6,6 +6,7 @@ module Threads
       begin
         yield
       rescue => e
+        puts e
         puts e.backtrace.join("\n")
       end
     end

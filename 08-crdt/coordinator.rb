@@ -1,8 +1,8 @@
 module Coordinator
 
   def coordination_services(leader)
-    coord_reqres = config(@name)["coord_req"]
-    coord_pubsub = config(@name)["coord_pub"]
+    coord_reqres = config("coord_req")
+    coord_pubsub = config("coord_pub")
     
     coordinate_cluster( coord_pubsub, coord_reqres ) if leader
     track_cluster( coord_pubsub )

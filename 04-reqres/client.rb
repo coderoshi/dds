@@ -1,6 +1,5 @@
 require 'zmq'
 require './threads'
-
 include Threads
 
 ctx = ZMQ::Context.new

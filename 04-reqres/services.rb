@@ -6,14 +6,10 @@
 # the remainder of the message is a payload,
 # calling and passed to the method
 module Services
-  def build_socket(kind, server=false, name=@name)
+  def connect(kind, port=2200, ip='127.0.0.1')
     ctx = ZMQ::Context.new
     sock = ctx.socket(kind)
-    if server
-      sock.bind("tcp://*:#{config(name,'port')}")
-    else
-      sock.connect("tcp://#{config(name,'ip')}:#{config(name,'port')}")
-    end
+    sock.connect("tcp://#{ip}:#{port}")
     sock
   end
 

@@ -37,7 +37,7 @@ class Node
   end
 
   def start()
-    service( config(@name, "port") )
+    service( config("port") )
     puts "#{@name} started"
     join_threads()
   end
@@ -76,9 +76,9 @@ class Node
     end
   end
 
-  def remote_call(remote_name, message)
-    puts "#{remote_name} <= #{message}"
-    req = build_socket(ZMQ::REQ, false, remote_name)
+  def remote_call(remote, message)
+    puts "#{remote} <= #{message}"
+    req = connect(ZMQ::REQ, config("port", remote), config("ip", remote))
     resp = req.send(message) && req.recv
     req.close
     resp

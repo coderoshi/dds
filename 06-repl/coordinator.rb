@@ -1,8 +1,8 @@
 module Coordinator
 
   def coordination_services(leader)
-    coord_reqres = config(@name)["coord_req"]
-    coord_pubsub = config(@name)["coord_pub"]
+    coord_reqres = config("coord_req")
+    coord_pubsub = config("coord_pub")
     
     coordinate_cluster( coord_pubsub, coord_reqres ) if leader
     track_cluster( coord_pubsub )
@@ -52,9 +52,7 @@ module Coordinator
   end
 
   def inform_coordinator(action, req_port)
-    ctx = ZMQ::Context.new
-    req = ctx.socket(ZMQ::REQ)
-    req.connect("tcp://127.0.0.1:#{req_port}")
+    req = connect(ZMQ::REQ, req_port)
     req.send("#{action} #{@name}") && req.recv
     req.close
   end

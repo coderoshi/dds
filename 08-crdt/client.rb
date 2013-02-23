@@ -3,7 +3,7 @@ require 'zmq'
 
 ctx = ZMQ::Context.new
 req = ctx.socket(ZMQ::REQ)
-req.connect("tcp://127.0.0.1:2200")
+req.connect("tcp://127.0.0.1:2201")
 
 req.send("put_counter 1 foo +1") && req.recv
 req.send("put_counter 1 foo +2") && req.recv

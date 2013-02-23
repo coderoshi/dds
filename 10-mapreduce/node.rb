@@ -114,7 +114,7 @@ class Node
       replicate("put 0 #{key} #{vclock} #{value}", key, n) unless n == 0
       node_objects
     else
-      remote_call(node, "put #{n} #{key} #{vclock} #{value}")
+      remote_call(@ring.node(key), "put #{n} #{key} #{vc} #{value}")
     end
   end
 

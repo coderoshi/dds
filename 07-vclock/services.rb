@@ -5,7 +5,14 @@
 # the first word is assumed to be a method, and
 # the remainder of the message is a payload,
 # calling and passed to the method
-module ReplyService
+module Services
+  def connect(kind, port=2200, ip='127.0.0.1')
+    ctx = ZMQ::Context.new
+    sock = ctx.socket(kind)
+    sock.connect("tcp://#{ip}:#{port}")
+    sock
+  end
+
   # helper function to create a req/res service,
   # and relay message to corresponding methods
   def service(port, sink=true)

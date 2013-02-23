@@ -54,10 +54,11 @@ class PartitionedConsistentHash
   def pref_list(keystr, n=3)
     list = []
     key = hash(keystr)
+    cover = n
     @ring.each do |range, node|
-      if range.cover?(key) || n < 3 && n > 0
+      if range === key || (cover < n && cover > 0)
         list << node
-        n -= 1
+        cover -= 1
       end
     end
     list
