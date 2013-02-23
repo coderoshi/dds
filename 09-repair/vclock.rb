@@ -22,6 +22,17 @@ class VectorClock
 
   def <=>(vclock2)
     equal, descendant, ancestor = true, true, true
+    # cids = (@vector.keys + vclock2.vector.keys).uniq
+    # cids.each do |cid|
+    #   count = @vector[cid].to_i
+    #   puts "#{cid} #{count}"
+    #   if count2 = vclock2.vector[cid].to_i
+    #     equal, descendant = false, false if count < count2
+    #     equal, ancestor = false, false if count > count2
+    #   elsif count != 0
+    #     equal, ancestor = false, false
+    #   end
+    # end
     @vector.each do |cid, count|
       if count2 = vclock2.vector[cid]
         equal, descendant = false, false if count < count2
@@ -61,18 +72,27 @@ end
 ### run tests
 if __FILE__ == $0
 
+  # vc = VectorClock.new
+  # vc.increment("adam")
+  # vc.increment("barb")
+
+  # vc2 = VectorClock.deserialize(vc.to_s)
+  # puts vc.descends_from?(vc2)
+
+  # vc.increment("adam")
+  # puts vc.descends_from?(vc2)
+
+  # vc2.increment("barb")
+  # puts vc2.conflicts_with?(vc)
+
+  # puts vc2.to_s
+
   vc = VectorClock.new
-  vc.increment("adam")
-  vc.increment("barb")
+  vc.increment("A")
 
-  vc2 = VectorClock.deserialize(vc.to_s)
+  vc2 = VectorClock.new
+  vc2.increment("B")
+
   puts vc.descends_from?(vc2)
-
-  vc.increment("adam")
-  puts vc.descends_from?(vc2)
-
-  vc2.increment("barb")
-  puts vc2.conflicts_with?(vc)
-
-  puts vc2.to_s
+  # puts vc <=> vc2
 end

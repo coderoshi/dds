@@ -77,7 +77,8 @@ class Node
       puts "get #{key}"
       @data[@ring.hash(key)]
     else
-      remote_call(node, "get #{key}")
+      results = remote_call(node, "get #{key}")
+      NodeObject.deserialize(results)
     end
   end
 

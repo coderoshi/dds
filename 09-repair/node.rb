@@ -3,7 +3,8 @@ require 'zmq'
 require './hash'
 require './vclock'
 require './threads'
-require './reply-service'
+require './config'
+require './services'
 require './coordinator'
 
 
@@ -41,7 +42,8 @@ end
 # Manages a hash ring as well as a hash of data
 class Node
   include Threads
-  include ReplyService
+  include Configuration
+  include Services
   include Coordinator
 
   def initialize(name, nodes=[], partitions=32)
@@ -50,15 +52,17 @@ class Node
     @data = {}
   end
 
-  def config(name)
-    (@configs ||= {})[name] ||= JSON::load(File.read("#{name}.json"))
-  end
-
   def start(leader)
     coordination_services( leader )
-    service( config(@name)["port"] )
+    service( config("port") )
     puts "#{@name} started"
     join_threads()
+  end
+
+  def stop
+    inform_coordinator( 'down', config("coord_req") )
+  ensure
+    exit!
   end
 
   def put_counter(socket, payload)
@@ -87,13 +91,23 @@ class Node
   end
 
   def do_put(key, vc, value, n=1, crdt=nil)
+    # if n == 0
+    #   vclock = VectorClock.deserialize(vc)
+    #   vclock.increment(@name)
+    #   puts "put 0 #{key} #{vclock} #{value}"
+    #   node_objects = [NodeObject.new(value, vclock)]
+    #   return @data[@ring.hash(key)] = node_objects
+    # end
     if @ring.pref_list(key, n).include?(@name) || n == 0
       vclock = VectorClock.deserialize(vc)
+      p vclock
       node_objects = []
       if current_objs = @data[@ring.hash(key)]
+        p !!current_objs.find{|o| o.vclock.descends_from?(vclock)}
+
         if vclock.empty? && current_objs.length == 1
           # if no clock was given, use the old one
-          vclock = current_objs.first.vclock
+          p vclock = current_objs.first.vclock
         elsif !vclock.empty? && !current_objs.find{|o| o.vclock.descends_from?(vclock)}
           # not a decendant of anything, ie conflict. add as a sibling
           node_objects += current_objs
@@ -142,7 +156,8 @@ class Node
         return results
       end
     else
-      remote_call(@ring.node(key), "get #{n} #{key}")
+      results = remote_call(@ring.node(key), "get #{n} #{key}")
+      NodeObject.deserialize(results)
     end
   end
 
@@ -175,21 +190,12 @@ class Node
     end
   end
 
-  def remote_call(remote_name, message)
-    puts "#{remote_name} <= #{message}"
-    remote_port = config(remote_name)["port"]
-    ctx = ZMQ::Context.new
-    req = ctx.socket(ZMQ::REQ)
-    req.connect("tcp://127.0.0.1:#{remote_port}")
+  def remote_call(remote, message)
+    puts "#{remote} <= #{message}"
+    req = connect(ZMQ::REQ, config("port",remote), config("ip",remote))
     resp = req.send(message) && req.recv
     req.close
     resp
-  end
-
-  def close
-    inform_coordinator( 'down', config(@name)["coord_req"] )
-  ensure
-    exit!
   end
 end
 
@@ -199,6 +205,6 @@ begin
   name, leader = ARGV
   leader = !leader.nil?
   $node = Node.new(name)
-  trap("SIGINT") { $node.close }
+  trap("SIGINT") { $node.stop }
   $node.start(leader)
 end

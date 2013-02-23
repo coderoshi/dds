@@ -3,7 +3,8 @@ require 'zmq'
 require './hash'
 require './vclock'
 require './threads'
-require './reply-service'
+require './config'
+require './services'
 require './coordinator'
 require './mapreduce'
 
@@ -43,7 +44,8 @@ end
 # Manages a hash ring as well as a hash of data
 class Node
   include Threads
-  include ReplyService
+  include Configuration
+  include Services
   include Coordinator
   include Mapreduce
 
@@ -53,15 +55,17 @@ class Node
     @data = {}
   end
 
-  def config(name)
-    (@configs ||= {})[name] ||= JSON::load(File.read("#{name}.json"))
-  end
-
   def start(leader)
     coordination_services( leader )
-    service( config(@name)["port"] )
+    service( config("port") )
     puts "#{@name} started"
     join_threads()
+  end
+
+  def stop
+    inform_coordinator( 'down', config("coord_req") )
+  ensure
+    exit!
   end
 
   def put_counter(socket, payload)
@@ -178,21 +182,12 @@ class Node
     end
   end
 
-  def remote_call(remote_name, message)
-    puts "#{remote_name} <= #{message}"
-    remote_port = config(remote_name)["port"]
-    ctx = ZMQ::Context.new
-    req = ctx.socket(ZMQ::REQ)
-    req.connect("tcp://127.0.0.1:#{remote_port}")
+  def remote_call(remote, message)
+    puts "#{remote} <= #{message}"
+    req = connect(ZMQ::REQ, config("port",remote), config("ip",remote))
     resp = req.send(message) && req.recv
     req.close
     resp
-  end
-
-  def close
-    inform_coordinator( 'down', config(@name)["coord_req"] )
-  ensure
-    exit!
   end
 end
 
@@ -202,6 +197,6 @@ begin
   name, leader = ARGV
   leader = !leader.nil?
   $node = Node.new(name)
-  trap("SIGINT") { $node.close }
+  trap("SIGINT") { $node.stop }
   $node.start(leader)
 end

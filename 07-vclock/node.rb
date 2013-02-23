@@ -129,7 +129,8 @@ class Node
         return results
       end
     else
-      remote_call(@ring.node(key), "get #{n} #{key}")
+      results = remote_call(@ring.node(key), "get #{n} #{key}")
+      NodeObject.deserialize(results)
     end
   end
 
