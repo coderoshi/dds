@@ -78,10 +78,9 @@ class Node
 
   def remote_call(remote, message)
     puts "#{remote} <= #{message}"
-    req = connect(ZMQ::REQ, config("port", remote), config("ip", remote))
-    resp = req.send(message) && req.recv
-    req.close
-    resp
+    communicate(ZMQ::REQ, config("port", remote), config("ip", remote)) do |req|
+      req.send(message) && req.recv
+    end
   end
 end
 
