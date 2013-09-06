@@ -7,10 +7,19 @@
 # calling and passed to the method
 module Services
   def connect(kind, port=2200, ip='127.0.0.1')
-    ctx = ZMQ::Context.new
-    sock = ctx.socket(kind)
+    @ctx ||= ZMQ::Context.new
+    sock = @ctx.socket(kind)
     sock.connect("tcp://#{ip}:#{port}")
     sock
+  end
+
+  def communicate(kind, port, ip)
+    @ctx ||= ZMQ::Context.new
+    sock = @ctx.socket(kind)
+    sock.connect("tcp://#{ip}:#{port}")
+    resp = yield sock
+    sock.close
+    resp
   end
 
   # helper function to create a req/res service,
